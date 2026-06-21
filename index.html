@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>riskwatch</title>
+
+    <link rel="stylesheet" href="styles.css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              graphite: "#3C3744",
+              "navy-electric": "#090C9B",
+              "royal-azure": "#3D52D5",
+              "powder-blue": "#B4C5E4",
+              ivory: "#FBFFF1",
+              "burnt-tangerine": "#E03616",
+            },
+            fontFamily: {
+              display: ["Mansalva", "cursive"],
+              mono: ["VT323", "monospace"],
+              sans: ["Inter", "sans-serif"],
+              notch: ["Stack Sans Notch", "sans-serif"],
+            },
+          },
+        },
+      };
+    </script>
+  </head>
+
+  <body
+    class="bg-ivory text-ivory min-h-screen relative flex flex-col items-center justify-center gap-4 px-6 text-center overflow-hidden"
+  >
+    <!-- GitHub link -->
+    <a
+      href="https://github.com/wrufay/riskwatch"
+      target="_blank"
+      class="absolute bottom-4 right-4 z-10 opacity-80 hover:opacity-100 transition-opacity"
+    >
+      <img src="assets/github.png" alt="GitHub" class="w-8 h-8" />
+    </a>
+
+    <!-- Background image -->
+    <img
+      src="assets/t.png"
+      alt=""
+      class="absolute bottom-0 left-0 w-full h-1/2 object-cover object-top opacity-60 pointer-events-none select-none"
+    />
+
+    <!-- Content -->
+    <div class="relative z-10 flex flex-col items-center gap-4">
+      <h1
+        class="font-display text-graphite text-6xl sm:text-8xl md:text-9xl tracking-wide"
+      >
+        riskwatch
+      </h1>
+      <p
+        class="font-mono text-lg sm:text-xl md:text-2xl text-graphite tracking-widest"
+      >
+        machine learning collision risk predictor.
+      </p>
+      <a
+        href="map.html"
+        class="mt-4 font-notch rounded-full text-base shadow-lg sm:text-lg md:text-xl tracking-widest border-2 border-powder-blue text-ivory bg-royal-azure px-6 sm:px-10 py-3 hover:bg-royal-azure/90 transition-colors"
+      >
+        open map
+      </a>
+    </div>
+  </body>
+</html>
