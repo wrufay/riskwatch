@@ -1,23 +1,176 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>riskwatch</title>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>riskwatch</title>
 
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@9.2.4/ol.css" />
-  <script src="https://cdn.jsdelivr.net/npm/ol@9.2.4/dist/ol.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/ol@9.2.4/ol.css"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/ol@9.2.4/dist/ol.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              graphite: "#3C3744",
+              "navy-electric": "#090C9B",
+              "royal-azure": "#3D52D5",
+              "powder-blue": "#B4C5E4",
+              ivory: "#FBFFF1",
+              "burnt-tangerine": "#E03616",
+            },
+            fontFamily: {
+              display: ["Mansalva", "cursive"],
+              mono: ["VT323", "monospace"],
+              sans: ["Inter", "sans-serif"],
+              notch: ["Stack Sans Notch", "sans-serif"],
+            },
+          },
+        },
+      };
+    </script>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
 
-  <link rel="stylesheet" href="styles.css" />
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body, #map { width: 100%; height: 100%; }
-  </style>
-</head>
+  <body class="font-sans">
+    <!-- Map -->
+    <div id="map" class="absolute inset-0"></div>
 
-<body>
-  <div id="map"></div>
-</body>
+    <!-- Clippy tutorial -->
+    <div
+      id="clippy"
+      class="absolute top-4 left-4 z-20 flex items-end gap-2 max-w-xs"
+    >
+      <img
+        src="assets/clippy.png"
+        alt="Clippy"
+        class="w-16 h-16 object-contain flex-shrink-0"
+      />
+      <div
+        class="bg-ivory border-2 border-graphite rounded-lg px-3 py-2 relative shadow-md"
+      >
+        <!-- close -->
+        <button
+          onclick="dismissClipy()"
+          class="absolute -top-2 -right-2 w-5 h-5 bg-burnt-tangerine text-ivory text-xs rounded-full flex items-center justify-center leading-none"
+        >
+          ×
+        </button>
+        <p
+          id="clippy-text"
+          class="typewriter font-mono text-graphite text-sm leading-snug"
+        ></p>
+      </div>
+    </div>
 
-<script src="map.js"></script>
+    <!-- Taskbar -->
+    <div
+      class="absolute bottom-0 left-0 right-0 z-20 bg-ivory border-t-2 border-b-2 border-royal-azure px-4 py-3 flex items-center gap-4 flex-wrap"
+    >
+      <!-- City toggle -->
+      <div class="flex border border-royal-azure overflow-hidden rounded-full">
+        <button
+          id="btn-ottawa"
+          onclick="setCity('ottawa')"
+          class="px-3 py-1 font-mono text-xl bg-navy-electric text-ivory transition-colors"
+        >
+          ottawa
+        </button>
+        <button
+          id="btn-halifax"
+          onclick="setCity('halifax')"
+          class="px-3 py-1 font-mono text-xl bg-royal-azure text-powder-blue transition-colors"
+        >
+          halifax
+        </button>
+      </div>
+
+      <div class="w-px h-6 bg-royal-azure opacity-50"></div>
+
+      <!-- Weather -->
+      <div class="flex items-center gap-2">
+        <span class="font-mono text-royal-azure text-xl">weather</span>
+        <select
+          id="weather"
+          class="bg-royal-azure text-ivory font-notch border-2 border-graphite text-sm rounded-full px-3 py-1 outline-none cursor-pointer"
+          onchange="onConditionChange()"
+        >
+          <option value="clear">clear</option>
+          <option value="rain">rain</option>
+          <option value="snow">snow</option>
+          <option value="fog">fog</option>
+          <option value="strong wind">strong wind</option>
+        </select>
+      </div>
+
+      <!-- Road surface -->
+      <div class="flex items-center gap-2">
+        <span class="font-mono text-royal-azure text-xl">road</span>
+        <select
+          id="road_surface"
+          class="bg-royal-azure text-ivory font-notch text-sm border-2 border-graphite rounded-full px-3 py-1 outline-none cursor-pointer"
+          onchange="onConditionChange()"
+        >
+          <option value="dry">dry</option>
+          <option value="wet">wet</option>
+          <option value="ice">ice</option>
+          <option value="snow">snow</option>
+          <option value="slush">slush</option>
+        </select>
+      </div>
+
+      <!-- Light -->
+      <div class="flex items-center gap-2">
+        <span class="font-mono text-royal-azure text-xl">light</span>
+        <select
+          id="light"
+          class="bg-royal-azure text-ivory font-notch text-sm border-2 border-graphite rounded-full px-3 py-1 outline-none cursor-pointer"
+          onchange="onConditionChange()"
+        >
+          <option value="daylight">daylight</option>
+          <option value="dawn">dawn</option>
+          <option value="dusk">dusk</option>
+          <option value="dark - lighted">dark, lit</option>
+          <option value="dark - not lighted">dark, unlit</option>
+        </select>
+      </div>
+
+      <!-- Hour -->
+      <div class="flex items-center gap-2">
+        <span class="font-mono text-royal-azure text-xl">hour</span>
+        <span id="hour-label" class="font-notch text-graphite text-sm w-10"
+          >12:00</span
+        >
+        <input
+          id="hour"
+          type="range"
+          min="0"
+          max="23"
+          value="12"
+          oninput="document.getElementById('hour-label').textContent = this.value.padStart(2,'0') + ':00'; onConditionChange()"
+          class="w-28"
+        />
+      </div>
+
+      <!-- Status -->
+      <span id="status" class="ml-auto font-mono text-xs text-powder-blue"
+        >ready.</span
+      >
+
+      <button
+        onclick="toggleTutorial()"
+        class="font-mono text-xs text-powder-blue hover:text-royal-azure transition-colors"
+      >
+        ?
+      </button>
+    </div>
+  </body>
+
+  <script src="map.js"></script>
 </html>
