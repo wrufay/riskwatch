@@ -1,1 +1,16 @@
-markdown
+markdown/
+
+# generated model files
+model/*.pkl
+
+# generated road data
+data/*.npy
+data/*_roads_tagged.csv
+
+# python
+__pycache__/
+*.pyc
+.env
+
+# os
+.DS_Store

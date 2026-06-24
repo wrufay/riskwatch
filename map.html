@@ -43,30 +43,52 @@
     <!-- Map -->
     <div id="map" class="absolute inset-0"></div>
 
-    <!-- Clippy tutorial -->
-    <div
-      id="clippy"
-      class="absolute top-4 left-4 z-20 flex items-end gap-2 max-w-xs"
-    >
-      <img
-        src="assets/clippy.png"
-        alt="Clippy"
-        class="w-16 h-16 object-contain flex-shrink-0"
-      />
-      <div
-        class="bg-ivory border-2 border-graphite rounded-lg px-3 py-2 relative shadow-md"
-      >
-        <!-- close -->
+    <!-- Prediction popup (positioned by ol.Overlay) -->
+    <div id="popup" class="hidden pointer-events-auto z-30">
+      <div class="bg-ivory/50 backdrop-blur-sm rounded-xl p-3 shadow-xl w-44 relative opacity-80">
         <button
-          onclick="dismissClipy()"
-          class="absolute -top-2 -right-2 w-5 h-5 bg-burnt-tangerine text-ivory text-xs rounded-full flex items-center justify-center leading-none"
-        >
-          ×
-        </button>
-        <p
-          id="clippy-text"
-          class="typewriter font-mono text-graphite text-sm leading-snug"
-        ></p>
+          onclick="closePopup()"
+          class="absolute top-2 right-3 font-mono text-graphite hover:text-burnt-tangerine text-base leading-none"
+        >×</button>
+        <p id="popup-total" class="font-notch text-graphite text-sm leading-tight mb-2 pr-4">—</p>
+        <div class="space-y-1.5">
+          <div class="flex items-center gap-1.5">
+            <span class="font-sans text-[10px] font-semibold text-burnt-tangerine w-14 shrink-0">fatal</span>
+            <div class="flex-1 bg-powder-blue rounded-full h-1 overflow-hidden">
+              <div id="bar-fatal" class="h-full bg-burnt-tangerine rounded-full transition-all duration-700" style="width:0%"></div>
+            </div>
+            <span id="pct-fatal" class="font-mono text-[10px] text-graphite w-7 text-right">0%</span>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <span class="font-sans text-[10px] font-semibold text-royal-azure w-14 shrink-0">non-fatal</span>
+            <div class="flex-1 bg-powder-blue rounded-full h-1 overflow-hidden">
+              <div id="bar-nonfatal" class="h-full bg-royal-azure rounded-full transition-all duration-700" style="width:0%"></div>
+            </div>
+            <span id="pct-nonfatal" class="font-mono text-[10px] text-graphite w-7 text-right">0%</span>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <span class="font-sans text-[10px] font-semibold text-navy-electric w-14 shrink-0">prop dmg</span>
+            <div class="flex-1 bg-powder-blue rounded-full h-1 overflow-hidden">
+              <div id="bar-propdmg" class="h-full bg-navy-electric rounded-full transition-all duration-700" style="width:0%"></div>
+            </div>
+            <span id="pct-propdmg" class="font-mono text-[10px] text-graphite w-7 text-right">0%</span>
+          </div>
+        </div>
+        <p id="popup-conditions" class="font-mono text-xs text-graphite opacity-60 mt-2 leading-snug hidden"></p>
+        <p id="popup-cf" class="font-sans text-xs text-royal-azure mt-1 leading-snug hidden"></p>
+        <div class="absolute left-1/2 -translate-x-1/2 -bottom-2 w-3 h-3 bg-ivory/75 rotate-45"></div>
+      </div>
+    </div>
+
+    <!-- Clippy tutorial -->
+    <div id="clippy" class="absolute top-4 left-4 z-20 flex items-end gap-2 max-w-xs">
+      <div class="bg-ivory/90 backdrop-blur-sm border-2 border-powder-blue rounded-lg px-3 py-2 relative w-[220px]">
+        <p id="clippy-text" class="font-notch text-graphite text-sm leading-snug min-h-[72px] mb-2"></p>
+        <div class="flex items-center justify-center gap-3 mt-1">
+          <button id="clippy-prev" onclick="tutorialPrev()" class="font-mono text-sm text-royal-azure hover:text-navy-electric">prev</button>
+          <button onclick="dismissClipy()" class="font-mono text-sm text-burnt-tangerine hover:text-red-700">close</button>
+          <button id="clippy-next" onclick="tutorialNext()" class="font-mono text-sm text-royal-azure hover:text-navy-electric">next</button>
+        </div>
       </div>
     </div>
 
@@ -137,36 +159,33 @@
           <option value="daylight">daylight</option>
           <option value="dawn">dawn</option>
           <option value="dusk">dusk</option>
-          <option value="dark - lighted">dark, lit</option>
-          <option value="dark - not lighted">dark, unlit</option>
+          <option value="dark">dark</option>
         </select>
       </div>
 
-      <!-- Hour -->
+      <!-- Radius -->
       <div class="flex items-center gap-2">
-        <span class="font-mono text-royal-azure text-xl">hour</span>
-        <span id="hour-label" class="font-notch text-graphite text-sm w-10"
-          >12:00</span
-        >
+        <span class="font-mono text-royal-azure text-xl">radius</span>
         <input
-          id="hour"
+          id="radius"
           type="range"
-          min="0"
-          max="23"
-          value="12"
-          oninput="document.getElementById('hour-label').textContent = this.value.padStart(2,'0') + ':00'; onConditionChange()"
-          class="w-28"
+          min="100"
+          max="1000"
+          step="50"
+          value="500"
+          class="w-20"
         />
+        <span id="radius-label" class="font-mono text-sm text-powder-blue w-12">500m</span>
       </div>
 
       <!-- Status -->
-      <span id="status" class="ml-auto font-mono text-xs text-powder-blue"
+      <span id="status" class="ml-auto font-mono text-sm text-powder-blue"
         >ready.</span
       >
 
       <button
         onclick="toggleTutorial()"
-        class="font-mono text-xs text-powder-blue hover:text-royal-azure transition-colors"
+        class="font-mono text-sm text-powder-blue hover:text-royal-azure transition-colors"
       >
         ?
       </button>
