@@ -55,7 +55,7 @@ const map = new ol.Map({
   }),
 });
 
-const API = ["localhost", "127.0.0.1"].includes(window.location.hostname)
+const API = ["localhost", "127.0.0.1", ""].includes(window.location.hostname)
   ? "http://localhost:8080"
   : "https://riskwatch-production.up.railway.app";
 
