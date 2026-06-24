@@ -20,7 +20,7 @@ def train(city):
         X, y, test_size=0.2, random_state=42, stratify=y
     )
 
-    model = RandomForestClassifier(n_estimators=100, class_weight="balanced", random_state=42, n_jobs=-1)
+    model = RandomForestClassifier(n_estimators=50, max_depth=20, class_weight="balanced", random_state=42, n_jobs=-1)
     model.fit(X_train, y_train)
 
     print(f"\n── {city} ──")
