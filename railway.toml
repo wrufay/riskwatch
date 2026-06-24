@@ -1,6 +1,7 @@
 [build]
 builder = "NIXPACKS"
 installCommand = "pip install flask flask-cors joblib numpy pandas scipy scikit-learn gunicorn"
+watchPatterns = ["api/**", "model/*.pkl", "data/*.csv"]
 
 [deploy]
-startCommand = "cd api && gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120"
+startCommand = "cd api && python -m gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120"
