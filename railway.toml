@@ -1,6 +1,5 @@
 [build]
 builder = "NIXPACKS"
-installCommand = "/opt/venv/bin/pip install -r api/requirements.txt"
 watchPatterns = ["api/**", "model/*.pkl", "data/*.csv"]
 
 [deploy]
