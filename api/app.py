@@ -4,6 +4,7 @@ import pandas as pd
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from scipy.spatial import KDTree
+import os
 
 SEVERITY_WEIGHT = {
     "fatal":                1.0,
@@ -16,7 +17,6 @@ CORS(app)
 
 models = {}
 city_dfs = {}
-city_baselines = {}
 
 for city in ("ottawa", "halifax"):
     try:
@@ -36,6 +36,91 @@ def get_crash_tree(city):
         df = city_dfs[city]
         crash_trees[city] = KDTree(df[["lat", "lon"]].values)
     return crash_trees[city]
+
+
+@app.route("/predict", methods=["POST"])
+def predict():
+    data = request.get_json()
+    city = data.get("city", "ottawa")
+    if city not in models:
+        return jsonify({"error": "model not loaded"}), 503
+
+    artifact = models[city]
+    model    = artifact["model"]
+    trained_cols = artifact["columns"]
+
+    lat = float(data.get("lat", 0))
+    lon = float(data.get("lon", 0))
+    _, highways, speeds = snap_road(city, [lat], [lon])
+    highway = highways[0]
+    speed   = int(speeds[0])
+
+    row = {
+        "weather": data.get("weather", "clear"),
+        "road":    data.get("road_surface", "dry"),
+        "light":   data.get("light", "daylight"),
+        "highway": highway,
+        "lat": lat, "lon": lon, "speed": float(speed),
+    }
+    X = pd.get_dummies(pd.DataFrame([row]))
+    X = X.reindex(columns=trained_cols, fill_value=0)
+    proba   = model.predict_proba(X)[0]
+    classes = model.classes_
+    probabilities = {cls: round(float(p), 3) for cls, p in zip(classes, proba)}
+    severity = classes[proba.argmax()]
+
+    # top active features by importance
+    importances = dict(zip(trained_cols, model.feature_importances_))
+    weather = data.get("weather", "clear")
+    road    = data.get("road_surface", "dry")
+    light   = data.get("light", "daylight")
+    active = {
+        f"weather_{weather}": importances.get(f"weather_{weather}", 0),
+        f"road_{road}":       importances.get(f"road_{road}", 0),
+        f"light_{light}":     importances.get(f"light_{light}", 0),
+        f"highway_{highway}": importances.get(f"highway_{highway}", 0),
+        "speed":              importances.get("speed", 0),
+        "location":           max(importances.get("lat", 0), importances.get("lon", 0)),
+    }
+
+    factors = [factor_label(k) for k, _ in sorted(active.items(), key=lambda x: -x[1])[:3]]
+
+    return jsonify({
+        "severity":      severity,
+        "probabilities": probabilities,
+        "highway":       highway,
+        "speed":         speed,
+        "conditions":    {"weather": weather, "road": road, "light": light},
+        "factors":       factors,
+    })
+
+
+@app.route("/local-records", methods=["POST"])
+def local_records():
+    data = request.get_json()
+    city = data.get("city", "ottawa")
+    lat  = float(data.get("lat", 0))
+    lon  = float(data.get("lon", 0))
+
+    if city not in city_dfs:
+        return jsonify({"error": "unknown city"}), 400
+
+    radius_m   = float(data.get("radius", DEFAULT_RADIUS_M))
+    radius_deg = radius_m / 111_000
+
+    df   = city_dfs[city]
+    tree = get_crash_tree(city)
+    idxs = tree.query_ball_point([lat, lon], radius_deg)
+    nearby = df.iloc[idxs]
+
+    SEV_ORDER = {"fatal": 0, "non-fatal injury": 1, "property damage only": 2}
+    nearby = nearby.sort_values("severity", key=lambda s: s.map(SEV_ORDER))
+
+    cols = ["severity", "weather", "road", "light", "highway", "speed"]
+    available = [c for c in cols if c in nearby.columns]
+    records = nearby[available].head(200).to_dict(orient="records")
+
+    return jsonify({"total": len(idxs), "records": records})
 
 
 @app.route("/local-stats", methods=["POST"])
@@ -139,6 +224,64 @@ ROAD_OPTS    = ["dry", "wet", "ice", "snow", "slush"]
 LIGHT_OPTS   = ["daylight", "dawn", "dusk", "dark"]
 
 
+def factor_label(name):
+    if name.startswith("weather_"): return name[8:] + " weather"
+    if name.startswith("road_"):    return name[5:] + " surface"
+    if name.startswith("light_"):   return name[6:] + " light"
+    if name.startswith("highway_"): return name[8:] + " road"
+    if name == "speed":    return "speed limit"
+    if name == "location": return "location"
+    return name
+
+
+def _batch_alternatives(city, weather, road, light, lat, lon):
+    """Snap road once, run base + all condition variants in one model.predict_proba call."""
+    artifact     = models[city]
+    model        = artifact["model"]
+    trained_cols = artifact["columns"]
+    classes      = list(model.classes_)
+
+    _, highways, speeds = snap_road(city, [lat], [lon])
+    highway = highways[0]
+    speed   = float(speeds[0])
+
+    base = {"weather": weather, "road": road, "light": light,
+            "highway": highway, "lat": lat, "lon": lon, "speed": speed}
+
+    alt_specs = []
+    for field, opts in [("weather", WEATHER_OPTS), ("road", ROAD_OPTS), ("light", LIGHT_OPTS)]:
+        cur = {"weather": weather, "road": road, "light": light}[field]
+        for val in opts:
+            if val != cur:
+                alt_specs.append((field, cur, val, {**base, field: val}))
+
+    all_rows = [base] + [s[3] for s in alt_specs]
+    df       = pd.DataFrame(all_rows)
+    X        = pd.get_dummies(df[["weather", "road", "light", "highway"]])
+    X["lat"]   = df["lat"].values
+    X["lon"]   = df["lon"].values
+    X["speed"] = df["speed"].values
+    X = X.reindex(columns=trained_cols, fill_value=0)
+
+    all_proba  = model.predict_proba(X)
+    fatal_idx  = classes.index("fatal")
+    base_proba = all_proba[0]
+    base_fatal = float(base_proba[fatal_idx])
+
+    alternatives = sorted([
+        {
+            "field":      field,
+            "from":       frm,
+            "to":         to,
+            "fatal_prob": round(float(p[fatal_idx]), 4),
+            "delta":      round(float(p[fatal_idx]) - base_fatal, 4),
+        }
+        for (field, frm, to, _), p in zip(alt_specs, all_proba[1:])
+    ], key=lambda x: x["delta"])
+
+    return highway, int(speed), base_proba, classes, base_fatal, alternatives
+
+
 def predict_batch(city, rows_df, return_distances=False):
     artifact = models[city]
     model = artifact["model"]
@@ -157,15 +300,6 @@ def predict_batch(city, rows_df, return_distances=False):
     fatal_probs = proba[:, fatal_idx]
     return (fatal_probs, distances) if return_distances else fatal_probs
 
-
-def compute_baselines():
-    for city in list(models.keys()):
-        df = city_dfs[city].sample(min(5000, len(city_dfs[city])), random_state=0)
-        probs = predict_batch(city, df[["weather", "road", "light", "lat", "lon"]])
-        city_baselines[city] = float(np.mean(probs))
-        print(f"{city} baseline fatal prob: {city_baselines[city]:.4f}")
-
-compute_baselines()
 
 
 @app.route("/risk-surface", methods=["POST"])
@@ -210,6 +344,28 @@ def risk_surface():
 @app.route("/counterfactual", methods=["POST"])
 def counterfactual():
     data = request.get_json()
+    city = data.get("city", "ottawa")
+    if city not in models:
+        return jsonify({"error": "model not loaded"}), 503
+
+    _, _, _, _, _, alternatives = _batch_alternatives(
+        city,
+        data.get("weather", "clear"),
+        data.get("road_surface", "dry"),
+        data.get("light", "daylight"),
+        float(data.get("lat", 0)),
+        float(data.get("lon", 0)),
+    )
+    best = next((a for a in alternatives if a["delta"] < 0), None)
+    if best:
+        return jsonify({"field": best["field"], "from": best["from"], "to": best["to"],
+                        "reduction": round(-best["delta"], 3)})
+    return jsonify({})
+
+
+@app.route("/predict-detail", methods=["POST"])
+def predict_detail():
+    data    = request.get_json()
     city    = data.get("city", "ottawa")
     weather = data.get("weather", "clear")
     road    = data.get("road_surface", "dry")
@@ -220,27 +376,43 @@ def counterfactual():
     if city not in models:
         return jsonify({"error": "model not loaded"}), 503
 
-    base = pd.DataFrame([{"weather": weather, "road": road, "light": light, "lat": lat, "lon": lon}])
-    base_fatal = float(predict_batch(city, base)[0])
+    highway, speed, base_proba, classes, base_fatal, alternatives = _batch_alternatives(
+        city, weather, road, light, lat, lon
+    )
 
-    best = None
-    best_reduction = 0.0
+    probabilities = {cls: round(float(p), 3) for cls, p in zip(classes, base_proba)}
+    severity      = classes[int(base_proba.argmax())]
 
-    for field, opts in [("weather", WEATHER_OPTS), ("road", ROAD_OPTS), ("light", LIGHT_OPTS)]:
-        current_val = {"weather": weather, "road": road, "light": light}[field]
-        for val in opts:
-            if val == current_val:
-                continue
-            row = {"weather": weather, "road": road, "light": light, "lat": lat, "lon": lon}
-            row[field] = val
-            p = float(predict_batch(city, pd.DataFrame([row]))[0])
-            reduction = base_fatal - p
-            if reduction > best_reduction:
-                best_reduction = reduction
-                best = {"field": field, "from": current_val, "to": val, "reduction": round(reduction, 3)}
+    trained_cols = models[city]["columns"]
+    model        = models[city]["model"]
+    importances  = dict(zip(trained_cols, model.feature_importances_))
+    active = {
+        f"weather_{weather}": importances.get(f"weather_{weather}", 0),
+        f"road_{road}":       importances.get(f"road_{road}", 0),
+        f"light_{light}":     importances.get(f"light_{light}", 0),
+        f"highway_{highway}": importances.get(f"highway_{highway}", 0),
+        "speed":              importances.get("speed", 0),
+        "location":           max(importances.get("lat", 0), importances.get("lon", 0)),
+    }
+    all_factors = [
+        {"label": factor_label(k), "importance": round(v, 4)}
+        for k, v in sorted(active.items(), key=lambda x: -x[1])
+    ]
 
-    return jsonify(best or {})
+    return jsonify({
+        "severity":      severity,
+        "probabilities": probabilities,
+        "highway":       highway,
+        "speed":         speed,
+        "conditions":    {"weather": weather, "road": road, "light": light},
+        "factors":       all_factors,
+        "alternatives":  alternatives,
+        "base_fatal":    round(base_fatal, 4),
+    })
 
 
+import os
 if __name__ == "__main__":
-    app.run(debug=True, port=8080)
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
+

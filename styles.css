@@ -11,6 +11,7 @@ body {
   width: 100%;
   height: 100%;
   overflow: hidden;
+  font-size: clamp(13px, 1.5vw, 16px);
 }
 
 #map {
@@ -53,6 +54,45 @@ input[type="range"]::-moz-range-thumb {
   cursor: pointer;
 }
 
+/* Modal animations */
+@keyframes modal-bg-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes modal-bg-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+@keyframes modal-card-in {
+  from { opacity: 0; transform: scale(0.94) translateY(12px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0); }
+}
+@keyframes modal-card-out {
+  from { opacity: 1; transform: scale(1)    translateY(0); }
+  to   { opacity: 0; transform: scale(0.96) translateY(8px); }
+}
+.modal-in {
+  animation: modal-bg-in 0.2s ease-out forwards;
+}
+.modal-in > div {
+  animation: modal-card-in 0.25s cubic-bezier(0.34, 1.15, 0.64, 1) forwards;
+}
+.modal-out {
+  animation: modal-bg-out 0.18s ease-in forwards;
+}
+.modal-out > div {
+  animation: modal-card-out 0.18s ease-in forwards;
+}
+
+/* Tutorial slide-in */
+@keyframes tutorial-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.tutorial-in {
+  animation: tutorial-in 0.22s ease-out forwards;
+}
+
 /* Popup slide-in */
 @keyframes popup-in {
   from { opacity: 0; transform: translateY(8px); }
@@ -60,6 +100,15 @@ input[type="range"]::-moz-range-thumb {
 }
 .popup-in {
   animation: popup-in 0.2s ease-out forwards;
+}
+
+/* Popup fade-out */
+@keyframes popup-out {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(6px); }
+}
+.popup-out {
+  animation: popup-out 0.4s ease-in forwards;
 }
 
 /* Pulse ring on map click */

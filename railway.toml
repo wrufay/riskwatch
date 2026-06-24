@@ -1,0 +1,6 @@
+[build]
+builder = "NIXPACKS"
+installCommand = "pip install flask flask-cors joblib numpy pandas scipy scikit-learn gunicorn"
+
+[deploy]
+startCommand = "cd api && gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120"

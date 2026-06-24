@@ -20,9 +20,17 @@ const heatmapLayer = new ol.layer.Heatmap({
 });
 
 const popupEl = document.getElementById("popup");
+const predictPopupEl = document.getElementById("predict-popup");
 
 const popupOverlay = new ol.Overlay({
   element: popupEl,
+  positioning: "bottom-center",
+  offset: [0, -12],
+  stopEvent: true,
+});
+
+const predictOverlay = new ol.Overlay({
+  element: predictPopupEl,
   positioning: "bottom-center",
   offset: [0, -12],
   stopEvent: true,
@@ -40,15 +48,22 @@ const map = new ol.Map({
     heatmapLayer,
     riskLayer,
   ],
-  overlays: [popupOverlay],
+  overlays: [popupOverlay, predictOverlay],
   view: new ol.View({
     center: ol.proj.fromLonLat([-75.6972, 45.4215]),
     zoom: 12,
   }),
 });
 
+const API = "http://localhost:8080";
+
 let currentCity = "";
+let currentMode  = "explore";
 let heatmapDebounce = null;
+let explorerCoordinate = null;
+let currentUnit = "m";
+let popupFadeTimer = null;
+let lastPredictData = null;
 
 // ── Heatmap ───────────────────────────────────────────────────────────────────
 
@@ -64,13 +79,38 @@ function getRadius() {
   return parseInt(document.getElementById("radius").value, 10);
 }
 
+function formatRadius(m) {
+  if (currentUnit === "km") return (m / 1000).toFixed(1) + "km";
+  if (currentUnit === "mi") return (m / 1609).toFixed(2) + "mi";
+  return m + "m";
+}
+
 document.getElementById("radius").addEventListener("input", () => {
-  document.getElementById("radius-label").textContent = getRadius() + "m";
+  document.getElementById("radius-label").textContent = formatRadius(getRadius());
 });
+
+function setUnit(unit) {
+  currentUnit = unit;
+  document.getElementById("radius-label").textContent = formatRadius(getRadius());
+  ["m", "km", "mi"].forEach((u) => {
+    const btn = document.getElementById("unit-" + u);
+    btn.classList.toggle("bg-navy-electric", u === unit);
+    btn.classList.toggle("text-ivory",        u === unit);
+    btn.classList.toggle("bg-royal-azure",    u !== unit);
+    btn.classList.toggle("text-powder-blue",  u !== unit);
+  });
+}
+
+let conditionsPanelOpen = false;
+function toggleConditionsPanel() {
+  conditionsPanelOpen = !conditionsPanelOpen;
+  document.getElementById("conditions-panel").classList.toggle("hidden", !conditionsPanelOpen);
+  document.getElementById("btn-conditions").textContent = conditionsPanelOpen ? "conditions ▴" : "conditions ▾";
+}
 
 async function loadRiskSurface(city, conditions) {
   try {
-    const res = await fetch("http://localhost:8080/risk-surface", {
+    const res = await fetch(`${API}/risk-surface`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ city, ...conditions }),
@@ -95,7 +135,7 @@ async function loadRiskSurface(city, conditions) {
 
 async function loadHeatmap(city, conditions = {}) {
   const params = new URLSearchParams(conditions).toString();
-  const url = `http://localhost:8080/points/${city}${params ? "?" + params : ""}`;
+  const url = `${API}/points/${city}${params ? "?" + params : ""}`;
 
   try {
     const fadeOut = setInterval(() => {
@@ -145,9 +185,13 @@ function showPopup(coordinate, stats, cf) {
   void popupEl.offsetWidth;
   popupEl.classList.add("popup-in");
 
+  clearTimeout(popupFadeTimer);
+  popupFadeTimer = setTimeout(closePopup, 10_000);
+
   const total = stats.total ?? 0;
+  const radiusLabel = formatRadius(stats.radius ?? getRadius());
   document.getElementById("popup-total").textContent =
-    total === 0 ? "no crashes nearby" : `${total} crashes nearby`;
+    total === 0 ? "no crashes nearby" : `${total} crashes within ${radiusLabel}`;
 
   const sev     = stats.severity ?? {};
   const fatal   = sev["fatal"] ?? 0;
@@ -168,7 +212,7 @@ function showPopup(coordinate, stats, cf) {
 
   const cfEl = document.getElementById("popup-cf");
   if (cf && cf.field && cf.reduction > 0.01) {
-    cfEl.textContent = `💡 ${cf.field} ${cf.from} → ${cf.to} reduces fatal risk by ${(cf.reduction * 100).toFixed(0)}%`;
+    cfEl.textContent = `${cf.field} ${cf.from} ➜ ${cf.to} reduces fatal risk by ${(cf.reduction * 100).toFixed(0)}%`;
     cfEl.classList.remove("hidden");
   } else {
     cfEl.classList.add("hidden");
@@ -184,9 +228,225 @@ function showPopup(coordinate, stats, cf) {
   }, 50);
 }
 
-function closePopup() {
-  popupEl.classList.add("hidden");
-  popupOverlay.setPosition(undefined);
+function fadeOutEl(el, overlay, instant = false) {
+  if (el.classList.contains("hidden")) return;
+  if (instant) {
+    el.classList.remove("popup-out");
+    el.classList.add("hidden");
+    overlay.setPosition(undefined);
+    return;
+  }
+  el.classList.add("popup-out");
+  el.addEventListener("animationend", () => {
+    el.classList.remove("popup-out");
+    el.classList.add("hidden");
+    overlay.setPosition(undefined);
+  }, { once: true });
+}
+
+function closePopup(instant = false) {
+  clearTimeout(popupFadeTimer);
+  fadeOutEl(popupEl, popupOverlay, instant);
+}
+
+function showPredictPopup(coordinate, data, cf) {
+  clearTimeout(popupFadeTimer);
+  popupFadeTimer = setTimeout(closePredictPopup, 10_000);
+  predictOverlay.setPosition(coordinate);
+  predictPopupEl.classList.remove("hidden");
+  predictPopupEl.classList.remove("popup-in");
+  void predictPopupEl.offsetWidth;
+  predictPopupEl.classList.add("popup-in");
+
+  const p = data.probabilities;
+  const fatal    = p["fatal"] ?? 0;
+  const nonfatal = p["non-fatal injury"] ?? 0;
+  const propdmg  = p["property damage only"] ?? 0;
+
+  document.getElementById("predict-severity").textContent = data.severity;
+
+  document.getElementById("pred-bar-fatal").style.width    = "0%";
+  document.getElementById("pred-bar-nonfatal").style.width = "0%";
+  document.getElementById("pred-bar-propdmg").style.width  = "0%";
+
+  // Condition chips
+  const conditionsEl = document.getElementById("predict-conditions");
+  conditionsEl.innerHTML = "";
+  const c = data.conditions ?? {};
+  for (const val of [c.weather, c.road, c.light].filter(Boolean)) {
+    conditionsEl.innerHTML += `<span class="font-mono text-[10px] bg-graphite text-powder-blue px-1.5 py-0.5 rounded-full border border-powder-blue/30">${val}</span>`;
+  }
+
+  // Road enrichment
+  const roadEl = document.getElementById("predict-road-info");
+  roadEl.textContent = `snapped to: ${data.highway} · ${data.speed} km/h`;
+  roadEl.classList.remove("hidden");
+
+  // Key factors
+  const factorsEl = document.getElementById("predict-factors");
+  if (data.factors?.length) {
+    factorsEl.textContent = `top factors: ${data.factors.join(" · ")}`;
+    factorsEl.classList.remove("hidden");
+  } else {
+    factorsEl.classList.add("hidden");
+  }
+
+  // Counterfactual
+  const cfEl = document.getElementById("predict-cf");
+  if (cf && cf.field && cf.reduction > 0.01) {
+    cfEl.textContent = `${cf.field} ${cf.from} ➜ ${cf.to} reduces fatal risk by ${(cf.reduction * 100).toFixed(0)}%`;
+    cfEl.classList.remove("hidden");
+  } else {
+    cfEl.classList.add("hidden");
+  }
+
+  setTimeout(() => {
+    document.getElementById("pred-bar-fatal").style.width    = (fatal * 100).toFixed(1) + "%";
+    document.getElementById("pred-bar-nonfatal").style.width = (nonfatal * 100).toFixed(1) + "%";
+    document.getElementById("pred-bar-propdmg").style.width  = (propdmg * 100).toFixed(1) + "%";
+    document.getElementById("pred-pct-fatal").textContent    = (fatal * 100).toFixed(0) + "%";
+    document.getElementById("pred-pct-nonfatal").textContent = (nonfatal * 100).toFixed(0) + "%";
+    document.getElementById("pred-pct-propdmg").textContent  = (propdmg * 100).toFixed(0) + "%";
+  }, 50);
+}
+
+function closePredictPopup(instant = false) {
+  clearTimeout(popupFadeTimer);
+  fadeOutEl(predictPopupEl, predictOverlay, instant);
+}
+
+// ── Predict detail modal ──────────────────────────────────────────────────────
+
+let lastPredictParams = null;
+
+function openPredictDetail() {
+  const d = lastPredictData;
+  if (!d) return;
+
+  document.getElementById("pmodal-severity").textContent = d.severity;
+  document.getElementById("pmodal-road").textContent     = `snapped to: ${d.highway} · ${d.speed} km/h`;
+
+  document.getElementById("pmodal-conditions").innerHTML =
+    [d.conditions.weather, d.conditions.road, d.conditions.light]
+      .map(val => `<span class="font-mono text-xs bg-graphite/60 text-powder-blue px-2 py-0.5 rounded-full border border-powder-blue/30">${val}</span>`)
+      .join("");
+
+  const p = d.probabilities;
+  document.getElementById("pmodal-bar-fatal").style.width    = "0%";
+  document.getElementById("pmodal-bar-nonfatal").style.width = "0%";
+  document.getElementById("pmodal-bar-propdmg").style.width  = "0%";
+  setTimeout(() => {
+    document.getElementById("pmodal-bar-fatal").style.width    = ((p["fatal"] ?? 0) * 100).toFixed(1) + "%";
+    document.getElementById("pmodal-bar-nonfatal").style.width = ((p["non-fatal injury"] ?? 0) * 100).toFixed(1) + "%";
+    document.getElementById("pmodal-bar-propdmg").style.width  = ((p["property damage only"] ?? 0) * 100).toFixed(1) + "%";
+    document.getElementById("pmodal-pct-fatal").textContent    = ((p["fatal"] ?? 0) * 100).toFixed(0) + "%";
+    document.getElementById("pmodal-pct-nonfatal").textContent = ((p["non-fatal injury"] ?? 0) * 100).toFixed(0) + "%";
+    document.getElementById("pmodal-pct-propdmg").textContent  = ((p["property damage only"] ?? 0) * 100).toFixed(0) + "%";
+  }, 80);
+
+  const maxImp = Math.max(...d.factors.map(f => f.importance));
+  document.getElementById("pmodal-factors").innerHTML = d.factors.map(f => {
+    const pct = maxImp > 0 ? (f.importance / maxImp * 100).toFixed(1) : "0";
+    return `<div class="flex items-center gap-2">
+      <span class="font-mono text-sm text-powder-blue w-36 shrink-0">${f.label}</span>
+      <div class="flex-1 rounded-full h-1.5 overflow-hidden" style="background:#2a2730">
+        <div class="h-full bg-powder-blue rounded-full transition-all duration-700" style="width:${pct}%"></div>
+      </div>
+      <span class="font-mono text-sm text-powder-blue opacity-50 w-12 text-right">${(f.importance * 100).toFixed(1)}%</span>
+    </div>`;
+  }).join("");
+
+  document.getElementById("pmodal-alternatives").innerHTML = d.alternatives.map(a => {
+    const sign = a.delta < 0 ? "↓" : a.delta > 0 ? "↑" : "—";
+    const col  = a.delta < -0.001 ? "text-royal-azure" : a.delta > 0.001 ? "text-burnt-tangerine" : "text-powder-blue opacity-40";
+    return `<div class="flex items-center gap-2 py-1 border-b border-powder-blue/10">
+      <span class="font-mono text-sm text-powder-blue opacity-50 w-16 shrink-0">${a.field}</span>
+      <span class="font-mono text-sm text-ivory">${a.from} ➜ ${a.to}</span>
+      <span class="font-mono text-sm ${col} ml-auto">${sign} ${Math.abs(a.delta * 100).toFixed(1)}%</span>
+    </div>`;
+  }).join("");
+
+  openModal("predict-modal");
+}
+
+function closePredictDetail() {
+  closeModal("predict-modal");
+}
+
+// ── Mode toggle ───────────────────────────────────────────────────────────────
+
+function setMode(mode) {
+  currentMode = mode;
+  closePopup(true);
+  closePredictPopup(true);
+
+  const exploreBtn = document.getElementById("btn-explore");
+  const predictBtn = document.getElementById("btn-predict");
+
+  exploreBtn.classList.toggle("bg-navy-electric", mode === "explore");
+  exploreBtn.classList.toggle("text-ivory",        mode === "explore");
+  exploreBtn.classList.toggle("bg-royal-azure",    mode !== "explore");
+  exploreBtn.classList.toggle("text-powder-blue",  mode !== "explore");
+
+  predictBtn.classList.toggle("bg-navy-electric", mode === "predict");
+  predictBtn.classList.toggle("text-ivory",        mode === "predict");
+  predictBtn.classList.toggle("bg-royal-azure",    mode !== "predict");
+  predictBtn.classList.toggle("text-powder-blue",  mode !== "predict");
+}
+
+// ── Modal helpers ─────────────────────────────────────────────────────────────
+
+function openModal(id) {
+  const el = document.getElementById(id);
+  el.classList.remove("hidden", "modal-out");
+  el.classList.add("modal-in");
+  el.addEventListener("animationend", () => el.classList.remove("modal-in"), { once: true });
+}
+
+function closeModal(id) {
+  const el = document.getElementById(id);
+  if (el.classList.contains("hidden")) return;
+  el.classList.remove("modal-in");
+  el.classList.add("modal-out");
+  el.addEventListener("animationend", () => {
+    el.classList.remove("modal-out");
+    el.classList.add("hidden");
+  }, { once: true });
+}
+
+// ── Explorer modal ────────────────────────────────────────────────────────────
+
+const SEV_COLOR = { "fatal": "text-burnt-tangerine", "non-fatal injury": "text-royal-azure", "property damage only": "text-navy-electric" };
+
+async function openExplorer() {
+  if (!explorerCoordinate) return;
+  const [lon, lat] = ol.proj.toLonLat(explorerCoordinate);
+  const res = await fetch(`${API}/local-records`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ city: currentCity, lat, lon, radius: getRadius() }),
+  });
+  const data = await res.json();
+  const list = document.getElementById("explorer-list");
+  document.getElementById("explorer-title").textContent = `${data.total} crashes nearby`;
+  list.innerHTML = data.records.map(r => {
+    const col = SEV_COLOR[r.severity] ?? "text-graphite";
+    const hw  = r.highway ? ` · ${r.highway}` : "";
+    const spd = r.speed   ? ` · ${r.speed}km/h` : "";
+    return `<div class="flex items-center gap-3 py-1.5 border-b border-powder-blue/40">
+      <span class="font-sans text-sm font-semibold ${col} w-28 shrink-0">${r.severity}</span>
+      <span class="font-mono text-sm text-graphite opacity-70">${r.weather} · ${r.road} · ${r.light}${hw}${spd}</span>
+    </div>`;
+  }).join("");
+  openModal("explorer-modal");
+}
+
+function closeExplorer() {
+  closeModal("explorer-modal");
+}
+
+function setPopupOpacity(val) {
+  document.getElementById("popup-card").style.opacity = val / 100;
 }
 
 // ── Pulse ring ────────────────────────────────────────────────────────────────
@@ -282,6 +542,9 @@ function tutorialPrev() {
 function startTutorial() {
   tutorialIdx = 0;
   clippyEl.style.display = "flex";
+  clippyEl.classList.remove("tutorial-in");
+  void clippyEl.offsetWidth;
+  clippyEl.classList.add("tutorial-in");
   renderStep(0);
 }
 
@@ -349,10 +612,6 @@ function onConditionChange() {
 // ── Analyze ───────────────────────────────────────────────────────────────────
 
 async function analyze(lat, lon, coordinate, pixel) {
-  const status = document.getElementById("status");
-  status.textContent = "analyzing...";
-  status.classList.remove("status-fade");
-
   const radius = getRadius();
   const params = {
     city:         currentCity,
@@ -365,33 +624,58 @@ async function analyze(lat, lon, coordinate, pixel) {
   };
 
   try {
-    const [statsRes, cfRes] = await Promise.all([
-      fetch("http://localhost:8080/local-stats", {
+    if (currentMode === "explore") {
+      explorerCoordinate = coordinate;
+      const [statsRes, cfRes] = await Promise.all([
+        fetch(`${API}/local-stats`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(params),
+        }),
+        fetch(`${API}/counterfactual`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(params),
+        }),
+      ]);
+      const stats = await statsRes.json();
+      const cf    = await cfRes.json();
+      const sev    = stats.severity ?? {};
+      const topSev = Object.entries(sev).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "property damage only";
+
+      closePredictPopup();
+      if (coordinate) showPopup(coordinate, { ...stats, radius }, cf);
+      if (pixel)      showPulse(pixel, topSev, radius);
+
+    } else {
+      lastPredictParams = params;
+      const res = await fetch(`${API}/predict-detail`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(params),
-      }),
-      fetch("http://localhost:8080/counterfactual", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(params),
-      }),
-    ]);
+      });
+      const d = await res.json();
+      lastPredictData = d;
 
-    const stats = await statsRes.json();
-    const cf    = await cfRes.json();
+      const bestAlt = d.alternatives?.find(a => a.delta < 0);
+      const cf = bestAlt
+        ? { field: bestAlt.field, from: bestAlt.from, to: bestAlt.to, reduction: -bestAlt.delta }
+        : null;
+      const pred = {
+        severity:      d.severity,
+        probabilities: d.probabilities,
+        conditions:    d.conditions,
+        highway:       d.highway,
+        speed:         d.speed,
+        factors:       d.factors.slice(0, 3).map(f => f.label),
+      };
 
-    const sev = stats.severity ?? {};
-    const topSev = Object.entries(sev).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "unknown";
-
-    void status.offsetWidth;
-    status.classList.add("status-fade");
-    status.textContent = `↑ ${stats.total ?? 0} crashes nearby`;
-
-    if (coordinate) showPopup(coordinate, stats, cf);
-    if (pixel)      showPulse(pixel, topSev, radius);
+      closePopup();
+      if (coordinate) showPredictPopup(coordinate, pred, cf);
+      if (pixel)      showPulse(pixel, d.severity, radius);
+    }
   } catch {
-    status.textContent = "api not connected.";
+    console.warn("api not connected.");
   }
 }
 
@@ -404,11 +688,6 @@ map.on("click", (e) => {
   const [lon, lat] = ol.proj.toLonLat(e.coordinate);
   const b = CITY_BOUNDS[currentCity];
   if (lat < b.lat[0] || lat > b.lat[1] || lon < b.lon[0] || lon > b.lon[1]) {
-    const status = document.getElementById("status");
-    status.textContent = `outside ${currentCity} region.`;
-    status.classList.remove("status-fade");
-    void status.offsetWidth;
-    status.classList.add("status-fade");
     return;
   }
   analyze(lat, lon, e.coordinate, e.pixel);
